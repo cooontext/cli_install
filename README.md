@@ -1,4 +1,4 @@
-# Prompt Share CLI
+# Cooontext CLI
 
 Extract and export chats from Claude, Copilot, and Cursor.
 
