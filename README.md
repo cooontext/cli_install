@@ -22,5 +22,19 @@ bash install.sh
 The install script will:
 - Detect your OS and architecture
 - Download the appropriate binary from GitHub Releases
-- Install to `/usr/local/bin` (or custom location via `INSTALL_DIR`)
+- Install to `~/.local/bin` (or custom location via `INSTALL_DIR`)
 - Set executable permissions
+
+## Uninstall
+
+Remove the binary:
+
+```bash
+rm ~/.local/bin/cooontext
+```
+
+If you installed to a custom location:
+
+```bash
+rm /your/custom/path/cooontext
+```

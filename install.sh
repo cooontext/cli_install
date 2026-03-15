@@ -15,7 +15,12 @@ VERSION="${VERSION:-latest}"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+NC='\033[0m'
+
+info()    { printf "${NC}%s\n" "$1"; }
+success() { printf "${GREEN}%s${NC}\n" "$1"; }
+warn()    { printf "${YELLOW}%s${NC}\n" "$1" >&2; }
+err()     { printf "${RED}%s${NC}\n" "$1" >&2; }
 
 abort() {
   printf "%s\n" "$@" >&2
@@ -96,7 +101,7 @@ prepare_install_dir() {
     # Try to create directory if it doesn't exist
     if [ ! -d "$dir" ]; then
         if mkdir -p "$dir" 2>/dev/null; then
-            echo "Created directory: $dir"
+            : # directory created silently
         else
             if [ "$os" != "windows" ] && [ "$EUID" -ne 0 ]; then
                 abort "$(
@@ -155,7 +160,7 @@ retry() {
   then
     while [[ $((--n)) -gt 0 ]]
     do
-      printf "${YELLOW}Trying again in %d seconds: %s${NC}\n" "${pause}" "$(shell_join "$@")" >&2
+      warn "Trying again in ${pause}s..."
       sleep "${pause}"
       ((pause *= 2))
       if "$@"
@@ -246,9 +251,8 @@ get_download_url() {
     
     # Resolve "latest" to actual tag name (GitHub doesn't support "latest" in download URLs)
     if [ "$version" = "latest" ]; then
-        echo "${YELLOW}Fetching latest release version...${NC}" >&2
         local latest_tag=$(get_latest_tag "$GITHUB_REPO")
-        
+
         if [ -z "$latest_tag" ]; then
             abort "$(
                 cat <<EOABORT
@@ -265,9 +269,8 @@ You can specify a version explicitly:
 EOABORT
             )"
         fi
-        
+
         version="$latest_tag"
-        echo "${GREEN}Latest version: ${version}${NC}" >&2
     fi
     
     echo "https://github.com/${GITHUB_REPO}/releases/download/${version}/${filename}"
@@ -275,42 +278,30 @@ EOABORT
 
 # Main installation function
 main() {
-    echo "${GREEN}Installing ${CLI_NAME}...${NC}"
-    
-    # Detect platform
     local platform=$(detect_platform)
-    echo "Detected platform: ${platform}"
-    
+
     if [ "$platform" = "unknown-unknown" ] || [ "$(echo $platform | cut -d'-' -f1)" = "unknown" ]; then
         abort "Unsupported platform: $(uname -s) $(uname -m)"
     fi
-    
-    # Determine install directory
+
+    local os=$(echo $platform | cut -d'-' -f1)
     INSTALL_DIR=$(get_default_install_dir "$platform")
-    echo "Install directory: ${INSTALL_DIR}"
-    
-    # Prepare install directory (create if needed, check permissions)
     prepare_install_dir "$INSTALL_DIR" "$platform"
-    
-    # Get download URL
+
     local download_url=$(get_download_url "$platform" "$VERSION")
-    echo "Downloading from: ${download_url}"
-    
+
     # Create temporary directory
     local temp_dir=$(mktemp -d)
     trap "rm -rf $temp_dir" EXIT
-    
-    # Download binary
+
     local output_file="${temp_dir}/${CLI_NAME}"
-    local os=$(echo $platform | cut -d'-' -f1)
     if [ "$os" = "windows" ]; then
         output_file="${output_file}.exe"
     fi
-    
-    echo "Downloading binary..."
-    
+
+    info "Installing ${CLI_NAME}..."
+
     local download_success=false
-    
     if command -v curl >/dev/null 2>&1; then
         if curl -L -f -o "$output_file" "$download_url" 2>/dev/null; then
             download_success=true
@@ -322,77 +313,52 @@ main() {
     else
         abort "Neither curl nor wget is installed. Please install one of them."
     fi
-    
+
     if [ "$download_success" = false ]; then
         abort "$(
             cat <<EOABORT
-Failed to download binary from:
-  ${download_url}
+Failed to download binary.
 
-Possible issues:
-  - Release version '${VERSION}' does not exist
-  - GitHub Releases may not be publicly accessible
   - Check: https://github.com/${GITHUB_REPO}/releases
-  - Network connectivity issues
+  - Or specify a version: VERSION=v1.0.0 bash install.sh
 EOABORT
         )"
     fi
-    
-    # Make executable (skip on Windows)
-    if [ "$os" != "windows" ]; then
-        chmod +x "$output_file"
-    fi
-    
-    # Install to target directory
+
+    # Install binary
     local install_path="${INSTALL_DIR}/${CLI_NAME}"
     if [ "$os" = "windows" ]; then
         install_path="${install_path}.exe"
     fi
-    echo "Installing to: ${install_path}"
+
+    if [ "$os" != "windows" ]; then
+        chmod +x "$output_file"
+    fi
     mv "$output_file" "$install_path"
-    
-    # Verify installation
-    if [ -f "$install_path" ]; then
-        if [ "$os" != "windows" ]; then
-            [ -x "$install_path" ] || chmod +x "$install_path"
+
+    if [ ! -f "$install_path" ]; then
+        abort "Installation failed: binary was not created at ${install_path}"
+    fi
+
+    success "✓ ${CLI_NAME} installed successfully"
+
+    # PATH check
+    if ! echo "$PATH" | grep -q "$INSTALL_DIR"; then
+        local shell_profile=""
+        if [ -f "$HOME/.zshrc" ]; then
+            shell_profile="$HOME/.zshrc"
+        elif [ -f "$HOME/.bashrc" ]; then
+            shell_profile="$HOME/.bashrc"
+        elif [ -f "$HOME/.bash_profile" ]; then
+            shell_profile="$HOME/.bash_profile"
         fi
-        
-        echo "${GREEN}✓ Installation successful!${NC}"
-        echo ""
-        echo "You can now use '${CLI_NAME}' from anywhere."
-        echo "Try running: ${CLI_NAME} --help"
-        
-        # Check if install directory is in PATH
-        if echo "$PATH" | grep -q "$INSTALL_DIR"; then
-            echo "${GREEN}✓ ${INSTALL_DIR} is in your PATH${NC}"
+
+        warn "Add ${INSTALL_DIR} to your PATH:"
+        if [ -n "$shell_profile" ]; then
+            info "  echo 'export PATH=\"${INSTALL_DIR}:\$PATH\"' >> ${shell_profile} && source ${shell_profile}"
         else
-            echo "${YELLOW}Warning: ${INSTALL_DIR} is not in your PATH${NC}"
-            echo ""
-            if [ "$os" = "windows" ]; then
-                echo "Add it to your PATH by adding this line to your ~/.bashrc or ~/.bash_profile:"
-                echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
-            else
-                local shell_profile=""
-                if [ -f "$HOME/.zshrc" ]; then
-                    shell_profile="$HOME/.zshrc"
-                elif [ -f "$HOME/.bashrc" ]; then
-                    shell_profile="$HOME/.bashrc"
-                elif [ -f "$HOME/.bash_profile" ]; then
-                    shell_profile="$HOME/.bash_profile"
-                fi
-                
-                if [ -n "$shell_profile" ]; then
-                    echo "Add it to your PATH by running:"
-                    echo "  echo 'export PATH=\"${INSTALL_DIR}:\$PATH\"' >> $shell_profile"
-                    echo "  source $shell_profile"
-                else
-                    echo "Add it to your PATH by adding this line to your shell profile:"
-                    echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
-                fi
-            fi
+            info "  export PATH=\"${INSTALL_DIR}:\$PATH\""
         fi
-    else
-        abort "Installation verification failed: ${install_path} was not created."
     fi
 }
 
